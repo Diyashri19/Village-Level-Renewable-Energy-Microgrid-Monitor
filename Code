@@ -1,0 +1,124 @@
+#include <Wire.h>
+#include "DHT.h"
+#include <MPU6050.h>
+#include <Adafruit_INA219.h>
+#include <BH1750.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// ====== Pin Definitions ======
+#define DHTPIN 5
+#define DHTTYPE DHT11
+#define ONE_WIRE_BUS 4  // DS18B20
+#define SDA_PIN 21
+#define SCL_PIN 22
+#define RELAY1 25
+#define RELAY2 26
+
+// ====== Objects ======
+DHT dht(DHTPIN, DHTTYPE);
+MPU6050 mpu;
+Adafruit_INA219 ina219;
+BH1750 lightMeter;
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature ds18b20(&oneWire);
+
+// ====== Timing for Relay ======
+unsigned long previousMillis = 0;
+const long interval = 5000; // 5 seconds toggle
+bool relayState = false;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  Serial.println("Initializing sensors and relays...");
+
+  // Relay setup
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+  digitalWrite(RELAY1, HIGH); // start OFF
+  digitalWrite(RELAY2, HIGH); // start OFF
+
+  // Initialize sensors
+  dht.begin();
+  Serial.println("✅ DHT11 initialized");
+
+  if (!ina219.begin()) Serial.println("❌ INA219 not found!");
+  else Serial.println("✅ INA219 initialized");
+
+  if (lightMeter.begin()) Serial.println("✅ BH1750 initialized");
+  else Serial.println("❌ BH1750 not found!");
+
+  mpu.initialize();
+  if (mpu.testConnection()) Serial.println("✅ MPU6050 connected");
+  else Serial.println("❌ MPU6050 connection failed!");
+
+  ds18b20.begin();
+  Serial.println("✅ DS18B20 initialized");
+}
+
+void loop() {
+  // ====== SENSOR READINGS ======
+  Serial.println("\n=======================");
+  Serial.println("📊 SENSOR READINGS");
+  Serial.println("=======================");
+
+  // DHT11
+  float humidity = dht.readHumidity();
+  float temperature = dht.readTemperature();
+  if (!isnan(humidity) && !isnan(temperature))
+    Serial.printf("DHT11 -> Temp: %.2f °C | Humidity: %.2f %%\n", temperature, humidity);
+  else
+    Serial.println("DHT11 read failed!");
+
+  // DS18B20
+  ds18b20.requestTemperatures();
+  float solarTemp = ds18b20.getTempCByIndex(0);
+  if (solarTemp != DEVICE_DISCONNECTED_C)
+    Serial.printf("DS18B20 -> Solar Surface Temp: %.2f °C\n", solarTemp);
+  else
+    Serial.println("DS18B20 read failed!");
+
+  // BH1750
+  float lightLevel = lightMeter.readLightLevel();
+  Serial.printf("BH1750 -> Light Intensity: %.2f lux\n", lightLevel);
+
+  // INA219
+  float busVoltage = ina219.getBusVoltage_V();
+  float current_mA = ina219.getCurrent_mA();
+  float power_mW = ina219.getPower_mW();
+  Serial.printf("INA219 -> Bus: %.2f V | Current: %.2f mA | Power: %.2f mW\n",
+                busVoltage, current_mA, power_mW);
+
+  // MPU6050
+  int16_t ax, ay, az;
+  int16_t gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  Serial.printf("MPU6050 -> Accel [X:%d Y:%d Z:%d] | Gyro [X:%d Y:%d Z:%d]\n",
+                ax, ay, az, gx, gy, gz);
+
+  // ====== SIMPLE CONDITIONS ======
+  if (lightLevel < 100.0)
+    Serial.println("☁ Low sunlight detected.");
+
+  if (power_mW < 100.0)
+    Serial.println("⚠ Power is low — check solar input or battery.");
+
+  if (abs(ax) > 2000 || abs(ay) > 2000 || abs(az - 16384) > 2000)
+    Serial.println("🚨 Movement detected (possible vibration or tilt)!");
+
+  // ====== RELAY TOGGLE (every 5s) ======
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    relayState = !relayState;
+
+    digitalWrite(RELAY1, relayState ? LOW : HIGH); // active LOW relay
+    digitalWrite(RELAY2, relayState ? LOW : HIGH);
+
+    Serial.printf("🔁 Relays switched %s\n", relayState ? "ON" : "OFF");
+  }
+
+  delay(1000);
+}
